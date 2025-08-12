@@ -1,67 +1,128 @@
-# bruce_chat_app.py
-
+# -*- coding: utf-8 -*-
 import streamlit as st
-from openai import OpenAI
+from huggingface_hub import InferenceClient
 
-# إعداد الصفحة
-st.set_page_config(page_title="بروس", page_icon="🤖", layout="centered")
-st.title("🤖 بروس")
-st.caption("MVP — محادثة عربية بسيطة (يتطلب مفتاح OpenAI في Secrets)")
+# -----------------------------
+# إعدادات عامة
+# -----------------------------
+st.set_page_config(page_title="بــروس 😄", page_icon="🤖", layout="centered")
 
-# التحقق من وجود المفتاح
-if "OPENAI_API_KEY" not in st.secrets or not st.secrets["OPENAI_API_KEY"]:
-    st.error("⚠️ ما لقيت OPENAI_API_KEY في Secrets.\nاذهب إلى: Manage app → Settings → Secrets وأضف:\n\nOPENAI_API_KEY = \"sk-...\"")
+# اقرأ مفتاح Hugging Face من السيكرتس
+if "HF_API_KEY" not in st.secrets:
+    st.error('مفتاح Hugging Face مفقود. ادخل على Manage app → Settings → Secrets وحط:\nHF_API_KEY = "hf_..."')
     st.stop()
 
-# عميل OpenAI
-client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
+HF_KEY = st.secrets["HF_API_KEY"]
+
+# اختَر موديل متاح على Inference API (لا يحتاج موافقة خاصة)
+# لو واجهت بطء جرّب تبدل للموديل الثاني
+MODEL_ID = "google/gemma-2-2b-it"  # خيار خفيف
+# MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"  # بديل
+
+client = InferenceClient(api_key=HF_KEY)
+
+SYSTEM_PROMPT = (
+    "انتَ بروس، ردّ بأسلوب عربي بسيط، لطيف، ومباشر. "
+    "اختصر قدر الإمكان، واذا طلب المستخدم خطوات فاعطِها مرقّمة. "
+    "لا تذكر سياسات أو مفاتيح أو إعدادات داخلية."
+)
+
+# -----------------------------
+# دوال المساعد
+# -----------------------------
+def chat_via_hf(messages, max_tokens=350, temperature=0.7):
+    """
+    نحاول أولاً chat_completion (لو متاحة في نسختك من huggingface_hub)،
+    ولو فشلت نرجع لطريقة text_generation مع قالب محادثة بسيط.
+    """
+    # 1) تجربة chat_completion (قد لا تتوفر في اصدارات قديمة)
+    try:
+        resp = client.chat_completion(
+            model=MODEL_ID,
+            messages=messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+        # استرجاع النص
+        return resp.choices[0].message.content.strip()
+    except Exception:
+        pass
+
+    # 2)Fallback: text_generation مع قالب محادثة
+    # نحول الرسائل إلى برومبت واحد
+    prompt_lines = [f"system: {SYSTEM_PROMPT}"]
+    for m in messages:
+        role = m.get("role", "user")
+        content = m.get("content", "")
+        prompt_lines.append(f"{role}: {content}")
+    prompt_lines.append("assistant:")
+
+    prompt = "\n".join(prompt_lines)
+
+    out = client.text_generation(
+        model=MODEL_ID,
+        prompt=prompt,
+        temperature=temperature,
+        max_new_tokens=max_tokens,
+        do_sample=True,
+        return_full_text=False,
+    )
+    # بعض الإصدارات ترجع string مباشرة
+    if isinstance(out, str):
+        return out.strip()
+    # وبعضها dict/obj فيه "generated_text"
+    gen = getattr(out, "generated_text", None) or out.get("generated_text", "")
+    return (gen or "").strip()
+
+
+def generate_response(history, user_text):
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    messages += history
+    messages.append({"role": "user", "content": user_text})
+    return chat_via_hf(messages)
+
+
+# -----------------------------
+# واجهة Streamlit
+# -----------------------------
+st.title("بــروس 😄")
+st.caption("MVP — محادثة عربية بسيطة (تعمل عبر Hugging Face Inference)")
 
 # حالة المحادثة
 if "history" not in st.session_state:
-    st.session_state.history = []  # عناصرها [(user, assistant), ...]
+    st.session_state.history = []
 
-SYSTEM_PROMPT = (
-    "أنت بروس: مساعد عربي ودود، مختصر وواضح، ترد باللهجة السهلة."
-    " إذا كان الطلب غامض اطلب توضيح. استخدم فقرات قصيرة وقوائم عند الحاجة."
-)
+# عرض السجل
+for turn in st.session_state.history:
+    if turn["role"] == "user":
+        st.chat_message("user").markdown(turn["content"])
+    else:
+        st.chat_message("assistant").markdown(turn["content"])
 
-def generate_response(history: list[tuple[str, str]], user_msg: str) -> str:
-    """ينشئ رسالة للـ API من التاريخ ويرجع رد المساعد."""
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    for u, a in history:
-        messages.append({"role": "user", "content": u})
-        messages.append({"role": "assistant", "content": a})
-    messages.append({"role": "user", "content": user_msg})
+# حقل الإدخال
+user_msg = st.chat_input("اكتب رسالتك...")
 
-    # استدعاء Chat Completions (الواجهة المستقرة في بايثون 1.x)
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=messages,
-        max_tokens=350,
-        temperature=0.6,
-    )
-    return resp.choices[0].message.content.strip()
+if user_msg:
+    # أضف رسالة المستخدم
+    st.session_state.history.append({"role": "user", "content": user_msg})
+    st.chat_message("user").markdown(user_msg)
 
-# واجهة الدردشة
+    with st.spinner("⏳ يفكر..."):
+        try:
+            reply = generate_response(st.session_state.history, user_msg)
+        except Exception as e:
+            st.error(f"صار خطأ أثناء الاتصال بالخدمة: {e}")
+            st.stop()
+
+    # أضف رد المساعد
+    st.session_state.history.append({"role": "assistant", "content": reply})
+    st.chat_message("assistant").markdown(reply)
+
+# شريط جانبي
 with st.sidebar:
-    if st.button("مسح المحادثة", use_container_width=True):
+    st.header("إعدادات")
+    if st.button("مسح المحادثة"):
         st.session_state.history = []
         st.experimental_rerun()
 
-# عرض المحادثات السابقة
-for u, a in st.session_state.history:
-    st.chat_message("user").markdown(u)
-    st.chat_message("assistant").markdown(a)
-
-# إدخال المستخدم
-user_input = st.chat_input("اكتب رسالتك هنا…")
-if user_input:
-    st.chat_message("user").markdown(user_input)
-    with st.spinner("🤖 بروس يكتب الرد…"):
-        try:
-            reply = generate_response(st.session_state.history, user_input)
-        except Exception as e:
-            st.error(f"صار خطأ أثناء الاتصال بـ OpenAI:\n\n{e}")
-        else:
-            st.session_state.history.append((user_input, reply))
-            st.chat_message("assistant").markdown(reply)
+    st.caption(":bulb: تلميح: لو حسّيت بطء، جرّب تبدّل MODEL_ID في أعلى الملف إلى موديل آخر يدعم Inference API.")
