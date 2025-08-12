@@ -87,4 +87,4 @@ for role, msg in st.session_state.history:
 st.sidebar.subheader("إعدادات")
 if st.sidebar.button("مسح المحادثة"):
     st.session_state.history = []
-    st.experimental_rerun()
+   st.rerun()
