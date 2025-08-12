@@ -1,117 +1,90 @@
 # bruce_chat_app.py
 import streamlit as st
-from pathlib import Path
 from huggingface_hub import InferenceClient
+import os
 
-# ---------- إعداد الصفحة ----------
-st.set_page_config(page_title="بروس 😄", page_icon="😄", layout="centered")
-
-# (اختياري) شعار لو حبيت تحطه داخل assets/logo.png
-logo_path = Path("assets/logo.png")
-if logo_path.exists():
-    st.image(str(logo_path), width=120)
-
-st.title("بروس 😄")
+# ===== إعداد الصفحة =====
+st.set_page_config(page_title="بروس 😁", page_icon="😁", layout="centered")
+st.title("بروس 😁")
 st.caption("MVP — محادثة عربية بسيطة تعمل عبر Hugging Face Inference")
 
-# ---------- التحقق من التوكن ----------
-if "HF_TOKEN" not in st.secrets or not st.secrets["HF_TOKEN"]:
-    st.error(
-        "ما لقيت متغير HF_TOKEN في Secrets.\n"
-        "روح لـ Manage app ▸ Settings ▸ Secrets وحط:\n\nHF_TOKEN = \"hf_...\""
-    )
+# ===== التحقق من التوكن =====
+HF_TOKEN = os.getenv("HF_TOKEN")
+if not HF_TOKEN:
+    st.error("مفقود HF_TOKEN في Secrets. روح إلى Manage app → Settings → Secrets وحط:\nHF_TOKEN = \"hf_...\"")
     st.stop()
-MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"
-HF_TOKEN = st.secrets["HF_TOKEN"]
 
-# ---------- إعداد العميل والموديل ----------
-# تقدر تغيّر الموديل لأي موديل يدعم text-generation على Hugging Face
-
-client = InferenceClient(model=MODEL_ID, token=HF_TOKEN)
-
-# ---------- ذاكرة المحادثة ----------
-if "history" not in st.session_state:
-    st.session_state.history = []  # عناصر بشكل: [("user", "..."), ("assistant", "...")]
-
-SYSTEM_PROMPT = (
-    "أنت بروس، رد بالعربية بشكل واضح ولطيف ومختصر.\n"
-    "إذا سأل المستخدم عن خطوات تقنية، اعطه خطوات مرقمة وبسيطة.\n"
-    "تجنب الردود الطويلة جداً."
+# اختر أحد الموديلات الداعمة للمحادثة (chat)
+MODEL_ID = st.sidebar.selectbox(
+    "الموديل الحالي:",
+    [
+        "HuggingFaceH4/zephyr-7b-beta",
+        "mistralai/Mistral-7B-Instruct-v0.2",
+        "tiiuae/falcon-7b-instruct",  # لو ما اشتغل ارجع لواحد من فوق
+    ],
+    index=0,
 )
 
-def build_prompt(history: list[tuple[str, str]], user_text: str) -> str:
+SYSTEM_PROMPT = (
+    "أنت روبوت دردشة اسمه بروس. رد بالعربية بشكل ودود، واضح ومختصر. "
+    "استخدم جمل قصيرة، واذا ما تقدر تساعد، قل ذلك بصراحة."
+)
+
+# ===== تهيئة العميل =====
+client = InferenceClient(api_key=HF_TOKEN)
+
+# ===== دوال الموديل (صيغة محادثة) =====
+def generate_reply(history: list[tuple[str, str]], user_msg: str) -> str:
     """
-    نبني برومبت بسيط للموديلات اللي تشتغل بنمط text-generation (مو محادثة أصلية).
+    history: قائمة من tuples [(role, content), ...] مثل:
+             [("user","..."), ("assistant","..."), ...]
     """
-    parts = [SYSTEM_PROMPT, ""]
+    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
+    # أضف المحادثة السابقة
     for role, content in history:
-        if role == "user":
-            parts.append(f"المستخدم: {content}")
-        else:
-            parts.append(f"بروس: {content}")
-    parts.append(f"المستخدم: {user_text}")
-    parts.append("بروس:")
-    return "\n".join(parts)
+        role = "assistant" if role == "assistant" else "user"
+        messages.append({"role": role, "content": content})
+    # أضف رسالة المستخدم الحالية
+    messages.append({"role": "user", "content": user_msg})
 
-def generate_response(history: list[tuple[str, str]], user_text: str) -> str:
-    prompt = build_prompt(history, user_text)
-    # نطلب نص جديد فقط (بدون إعادة النص الأصلي)
-    # ملاحظة: بعض الموديلات تتعامل أفضل مع do_sample=True وبعضها False؛ جرّب لو حبيت
-    out = client.text_generation(
-        prompt,
-        max_new_tokens=256,
-        temperature=0.2,
-        top_p=0.9,
-        repetition_penalty=1.1,
-        do_sample=True,
-        return_full_text=False,
+    # استدعاء chat.completions (مو text-generation)
+    resp = client.chat.completions.create(
+        model=MODEL_ID,
+        messages=messages,
+        max_tokens=350,
+        temperature=0.7,
     )
-    # بعض السرفرات ترجع كائن/ديكت، وبعضها سترينغ—نضمن التحويل لنص
-    return str(out).strip()
+    return resp.choices[0].message.content.strip()
 
-# ---------- الواجهة ----------
+# ===== واجهة Streamlit =====
+if "history" not in st.session_state:
+    st.session_state.history = []  # [(role, content)]
+
 with st.form("chat_form", clear_on_submit=True):
-    user_input = st.text_input("اكتب رسالتك...", placeholder="مثلاً: أهلاً بروس", label_visibility="collapsed")
+    user_text = st.text_input("مثلاً: أهلًا بروس!", placeholder="اكتب رسالتك...", label_visibility="collapsed")
     submitted = st.form_submit_button("إرسال")
 
-# زر سريع للتجارب
-if st.button("اهلا بروس", use_container_width=True):
-    st.session_state.history.append(("user", "أهلًا بروس"))
-    try:
-        reply = generate_response(st.session_state.history, "أهلًا بروس")
-    except Exception as e:
-        st.error(f"صار خطأ أثناء الاتصال بالخدمة:\n\n{e}")
-    else:
-        st.session_state.history.append(("assistant", reply))
-        st.rerun()
+if submitted and user_text.strip():
+    with st.spinner("يكتب…"):
+        try:
+            reply = generate_reply(st.session_state.history, user_text.strip())
+        except Exception as e:
+            st.error(f"صار خطأ أثناء الاتصال بالخدمة:\n\n{e}\n\n"
+                     "لو شفت رسالة 'not supported for task text-generation' تأكد إننا نستخدم chat "
+                     "وجرب موديل آخر من الشريط الجانبي.")
+        else:
+            st.session_state.history.append(("user", user_text.strip()))
+            st.session_state.history.append(("assistant", reply))
 
-# عرض الرسائل السابقة
-for role, content in st.session_state.history:
+# طباعة المحادثة
+for role, msg in st.session_state.history:
     if role == "user":
-        st.chat_message("user").markdown(content)
+        st.chat_message("user").markdown(msg)
     else:
-        st.chat_message("assistant").markdown(content)
+        st.chat_message("assistant").markdown(msg)
 
-# معالجة الإرسال من الحقل
-if submitted and user_input.strip():
-    st.chat_message("user").markdown(user_input)
-    st.session_state.history.append(("user", user_input))
-    try:
-        reply = generate_response(st.session_state.history, user_input)
-    except Exception as e:
-        st.error(
-            "صار خطأ أثناء الاتصال بالخدمة.\n\n"
-            f"{e}\n\n"
-            "إذا شفت رسالة فيها 'not supported for task text-generation' غيّر MODEL_ID لموديل يدعم text-generation."
-        )
-    else:
-        st.session_state.history.append(("assistant", reply))
-        st.chat_message("assistant").markdown(reply)
-
-# أدوات جانبية
-with st.sidebar:
-    st.header("إعدادات")
-    st.write(f"الموديل الحالي: `{MODEL_ID}`")
-    if st.button("مسح المحادثة"):
-        st.session_state.history = []
-        st.experimental_rerun()
+# زر لمسح المحادثة
+st.sidebar.subheader("إعدادات")
+if st.sidebar.button("مسح المحادثة"):
+    st.session_state.history = []
+    st.experimental_rerun()
