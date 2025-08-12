@@ -21,12 +21,12 @@ if "HF_TOKEN" not in st.secrets or not st.secrets["HF_TOKEN"]:
         "روح لـ Manage app ▸ Settings ▸ Secrets وحط:\n\nHF_TOKEN = \"hf_...\""
     )
     st.stop()
-
+MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"
 HF_TOKEN = st.secrets["HF_TOKEN"]
 
 # ---------- إعداد العميل والموديل ----------
 # تقدر تغيّر الموديل لأي موديل يدعم text-generation على Hugging Face
-MODEL_ID = "tiiuae/falcon-7b-instruct"
+
 client = InferenceClient(model=MODEL_ID, token=HF_TOKEN)
 
 # ---------- ذاكرة المحادثة ----------
