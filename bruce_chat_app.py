@@ -1,70 +1,47 @@
-# Bruce Chat — Streamlit + OpenAI
-import os
-from pathlib import Path
 import streamlit as st
 from openai import OpenAI
 
-# إعدادات الصفحة
-st.set_page_config(page_title="بروس 😎", page_icon="🤖", layout="centered")
+# تفعيل الـ API Key من الـ Secrets في Streamlit
+client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-# لوغو (اختياري)
-logo_path = Path("assets/logo.png")
-if logo_path.exists():
-    st.image(str(logo_path), width=120)
-st.title("بروس")
-st.caption("MVP — يرد بالعربي بشكل واضح وسريع.")
+st.set_page_config(page_title="بروس 😁", page_icon="😁")
 
-# تهيئة العميل + التحقق من السر
-def get_client():
-    if not os.environ.get("OPENAI_API_KEY"):
-        st.error("ما لقيت السر OPENAI_API_KEY.\nاذهب إلى: App → Settings → Secrets وأضفه هناك.")
-        st.stop()
-    return OpenAI()
-client = get_client()
-
-# المولّد
-def generate(history, user_msg):
-    system = (
-        "أنت مساعد اسمه بروس. ردّ بالعربية الواضحة، مختصر وبدون تكرار. "
-        "إذا كان الطلب غامض، اسأل سؤال توضيحي قصير. لا تستخدم لهجة جارفيز 😂."
-    )
-    msgs = [{"role": "system", "content": system}]
-    for u, a in history[-8:]:
-        msgs.append({"role": "user", "content": u})
-        msgs.append({"role": "assistant", "content": a})
-    msgs.append({"role": "user", "content": user_msg})
-
-    resp = client.chat.completions.create(
-        model="gpt-4o-mini",
-        messages=msgs,
-        temperature=0.6,
-        max_tokens=350,
-    )
-    return resp.choices[0].message.content.strip()
-
-# حالة المحادثة + الواجهة
 if "history" not in st.session_state:
     st.session_state.history = []
 
-with st.sidebar:
-    if st.button("مسح المحادثة"):
-        st.session_state.history.clear()
-        st.rerun()
+st.title("بروس 😁")
+st.caption("MVP — يرد بالعربي بشكل واضح وسريع")
+
+# دالة لتوليد الردود من OpenAI
+def generate(history, user_input):
+    messages = [{"role": "system", "content": "أنت بروس، رد بالعربية بشكل واضح ومختصر."}]
+    for u, a in history:
+        messages.append({"role": "user", "content": u})
+        messages.append({"role": "assistant", "content": a})
+    messages.append({"role": "user", "content": user_input})
+
+    resp = client.chat.completions.create(
+        model="gpt-4o-mini",
+        messages=messages,
+        max_tokens=350
+    )
+    reply = resp.choices[0].message.content
+    return reply
 
 # عرض المحادثة السابقة
-for u, a in st.session_state.history:
+for user_msg, bot_msg in st.session_state.history:
     with st.chat_message("user"):
-        st.markdown(u)
+        st.markdown(user_msg)
     with st.chat_message("assistant"):
-        st.markdown(a)
+        st.markdown(bot_msg)
 
 # إدخال المستخدم
-prompt = st.chat_input("اكتب رسالتك…")
-if prompt:
+if prompt := st.chat_input("...اكتب رسالتك"):
     with st.chat_message("user"):
         st.markdown(prompt)
-    with st.spinner("بروس يكتب…"):
-        reply = generate(st.session_state.history, prompt)
-    st.session_state.history.append((prompt, reply))
+
     with st.chat_message("assistant"):
-        st.markdown(reply)
+        with st.spinner("⏳ بروس يكتب..."):
+            reply = generate(st.session_state.history, prompt)
+            st.session_state.history.append((prompt, reply))
+            st.markdown(reply)
