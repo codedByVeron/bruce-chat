@@ -1,90 +1,66 @@
-# bruce_chat_app.py
 import streamlit as st
-from huggingface_hub import InferenceClient
+import requests
 import os
 
-# ===== إعداد الصفحة =====
-st.set_page_config(page_title="بروس 😁", page_icon="😁", layout="centered")
+# إعداد الصفحة
+st.set_page_config(page_title="بروس 😁", layout="centered")
+
 st.title("بروس 😁")
-st.caption("MVP — محادثة عربية بسيطة تعمل عبر Hugging Face Inference")
+st.write("MVP — محادثة عربية بسيطة تعمل عبر Hugging Face Inference")
 
-# ===== التحقق من التوكن =====
+# قراءة التوكن من Secrets
 HF_TOKEN = os.getenv("HF_TOKEN")
-if not HF_TOKEN:
-    st.error("مفقود HF_TOKEN في Secrets. روح إلى Manage app → Settings → Secrets وحط:\nHF_TOKEN = \"hf_...\"")
-    st.stop()
 
-# اختر أحد الموديلات الداعمة للمحادثة (chat)
+# اختيار الموديل
 MODEL_ID = st.sidebar.selectbox(
     "الموديل الحالي:",
     [
         "HuggingFaceH4/zephyr-7b-beta",
-        "mistralai/Mistral-7B-Instruct-v0.2",
-        "tiiuae/falcon-7b-instruct",  # لو ما اشتغل ارجع لواحد من فوق
-    ],
-    index=0,
+        "tiiuae/falcon-7b-instruct",
+        "mistralai/Mistral-7B-Instruct-v0.2"
+    ]
 )
 
-SYSTEM_PROMPT = (
-    "أنت روبوت دردشة اسمه بروس. رد بالعربية بشكل ودود، واضح ومختصر. "
-    "استخدم جمل قصيرة، واذا ما تقدر تساعد، قل ذلك بصراحة."
-)
+# دالة إرسال الرسالة لـ Hugging Face
+def query_huggingface(prompt):
+    API_URL = f"https://api-inference.huggingface.co/models/{MODEL_ID}"
+    headers = {"Authorization": f"Bearer {HF_TOKEN}"}
+    payload = {"inputs": prompt}
+    try:
+        response = requests.post(API_URL, headers=headers, json=payload)
+        if response.status_code == 200:
+            data = response.json()
+            if isinstance(data, list) and "generated_text" in data[0]:
+                return data[0]["generated_text"]
+            elif isinstance(data, dict) and "generated_text" in data:
+                return data["generated_text"]
+        return f"⚠️ خطأ من API: {response.text}"
+    except Exception as e:
+        return f"⚠️ استثناء: {e}"
 
-# ===== تهيئة العميل =====
-client = InferenceClient(api_key=HF_TOKEN)
-
-# ===== دوال الموديل (صيغة محادثة) =====
-def generate_reply(history: list[tuple[str, str]], user_msg: str) -> str:
-    """
-    history: قائمة من tuples [(role, content), ...] مثل:
-             [("user","..."), ("assistant","..."), ...]
-    """
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    # أضف المحادثة السابقة
-    for role, content in history:
-        role = "assistant" if role == "assistant" else "user"
-        messages.append({"role": role, "content": content})
-    # أضف رسالة المستخدم الحالية
-    messages.append({"role": "user", "content": user_msg})
-
-    # استدعاء chat.completions (مو text-generation)
-    resp = client.chat.completions.create(
-        model=MODEL_ID,
-        messages=messages,
-        max_tokens=350,
-        temperature=0.7,
-    )
-    return resp.choices[0].message.content.strip()
-
-# ===== واجهة Streamlit =====
+# حفظ المحادثة
 if "history" not in st.session_state:
-    st.session_state.history = []  # [(role, content)]
+    st.session_state.history = []
 
-with st.form("chat_form", clear_on_submit=True):
-    user_text = st.text_input("مثلاً: أهلًا بروس!", placeholder="اكتب رسالتك...", label_visibility="collapsed")
-    submitted = st.form_submit_button("إرسال")
+# مربع إدخال المستخدم
+user_msg = st.text_input("...اكتب رسالتك")
 
-if submitted and user_text.strip():
-    with st.spinner("يكتب…"):
-        try:
-            reply = generate_reply(st.session_state.history, user_text.strip())
-        except Exception as e:
-            st.error(f"صار خطأ أثناء الاتصال بالخدمة:\n\n{e}\n\n"
-                     "لو شفت رسالة 'not supported for task text-generation' تأكد إننا نستخدم chat "
-                     "وجرب موديل آخر من الشريط الجانبي.")
-        else:
-            st.session_state.history.append(("user", user_text.strip()))
-            st.session_state.history.append(("assistant", reply))
+# زر الإرسال
+if st.button("إرسال"):
+    if user_msg.strip():
+        st.session_state.history.append(("أنت", user_msg))
+        bot_reply = query_huggingface(user_msg)
+        st.session_state.history.append(("بروس", bot_reply))
+        st.rerun()
 
-# طباعة المحادثة
-for role, msg in st.session_state.history:
-    if role == "user":
-        st.chat_message("user").markdown(msg)
+# عرض المحادثة
+for sender, message in st.session_state.history:
+    if sender == "أنت":
+        st.markdown(f"**🧑‍💻 {sender}:** {message}")
     else:
-        st.chat_message("assistant").markdown(msg)
+        st.markdown(f"**🤖 {sender}:** {message}")
 
-# زر لمسح المحادثة
-st.sidebar.subheader("إعدادات")
+# زر مسح المحادثة
 if st.sidebar.button("مسح المحادثة"):
     st.session_state.history = []
-   st.rerun()
+    st.rerun()
