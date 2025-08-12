@@ -1,128 +1,92 @@
-# -*- coding: utf-8 -*-
+# bruce_chat_app.py
+
 import streamlit as st
+from pathlib import Path
 from huggingface_hub import InferenceClient
 
-# -----------------------------
-# إعدادات عامة
-# -----------------------------
-st.set_page_config(page_title="بــروس 😄", page_icon="🤖", layout="centered")
+# إعداد الصفحة
+st.set_page_config(page_title="بروس 😄", page_icon="😄", layout="centered")
 
-# اقرأ مفتاح Hugging Face من السيكرتس
-if "HF_API_KEY" not in st.secrets:
-    st.error('مفتاح Hugging Face مفقود. ادخل على Manage app → Settings → Secrets وحط:\nHF_API_KEY = "hf_..."')
-    st.stop()
+# (اختياري) شعار
+logo_path = Path("assets/logo.png")
+if logo_path.exists():
+    st.image(str(logo_path), width=120)
 
-HF_KEY = st.secrets["HF_API_KEY"]
-
-# اختَر موديل متاح على Inference API (لا يحتاج موافقة خاصة)
-# لو واجهت بطء جرّب تبدل للموديل الثاني
-MODEL_ID = "google/gemma-2-2b-it"  # خيار خفيف
-# MODEL_ID = "HuggingFaceH4/zephyr-7b-beta"  # بديل
-
-client = InferenceClient(api_key=HF_KEY)
-
-SYSTEM_PROMPT = (
-    "انتَ بروس، ردّ بأسلوب عربي بسيط، لطيف، ومباشر. "
-    "اختصر قدر الإمكان، واذا طلب المستخدم خطوات فاعطِها مرقّمة. "
-    "لا تذكر سياسات أو مفاتيح أو إعدادات داخلية."
-)
-
-# -----------------------------
-# دوال المساعد
-# -----------------------------
-def chat_via_hf(messages, max_tokens=350, temperature=0.7):
-    """
-    نحاول أولاً chat_completion (لو متاحة في نسختك من huggingface_hub)،
-    ولو فشلت نرجع لطريقة text_generation مع قالب محادثة بسيط.
-    """
-    # 1) تجربة chat_completion (قد لا تتوفر في اصدارات قديمة)
-    try:
-        resp = client.chat_completion(
-            model=MODEL_ID,
-            messages=messages,
-            max_tokens=max_tokens,
-            temperature=temperature,
-        )
-        # استرجاع النص
-        return resp.choices[0].message.content.strip()
-    except Exception:
-        pass
-
-    # 2)Fallback: text_generation مع قالب محادثة
-    # نحول الرسائل إلى برومبت واحد
-    prompt_lines = [f"system: {SYSTEM_PROMPT}"]
-    for m in messages:
-        role = m.get("role", "user")
-        content = m.get("content", "")
-        prompt_lines.append(f"{role}: {content}")
-    prompt_lines.append("assistant:")
-
-    prompt = "\n".join(prompt_lines)
-
-    out = client.text_generation(
-        model=MODEL_ID,
-        prompt=prompt,
-        temperature=temperature,
-        max_new_tokens=max_tokens,
-        do_sample=True,
-        return_full_text=False,
-    )
-    # بعض الإصدارات ترجع string مباشرة
-    if isinstance(out, str):
-        return out.strip()
-    # وبعضها dict/obj فيه "generated_text"
-    gen = getattr(out, "generated_text", None) or out.get("generated_text", "")
-    return (gen or "").strip()
-
-
-def generate_response(history, user_text):
-    messages = [{"role": "system", "content": SYSTEM_PROMPT}]
-    messages += history
-    messages.append({"role": "user", "content": user_text})
-    return chat_via_hf(messages)
-
-
-# -----------------------------
-# واجهة Streamlit
-# -----------------------------
-st.title("بــروس 😄")
+st.title("بروس 😄")
 st.caption("MVP — محادثة عربية بسيطة (تعمل عبر Hugging Face Inference)")
 
-# حالة المحادثة
+# التحقق من وجود التوكن
+if "HF_TOKEN" not in st.secrets or not st.secrets["HF_TOKEN"]:
+    st.error("🔑 ما لقيت HF_TOKEN في Secrets. روح لـ Manage app → Settings → Secrets وحطه هناك.")
+    st.stop()
+
+# عميل Hugging Face
+MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.3"  # موديل يدعم text-generation
+client = InferenceClient(model=MODEL_ID, token=st.secrets["HF_TOKEN"])
+
+# ذاكرة الدردشة
 if "history" not in st.session_state:
-    st.session_state.history = []
+    st.session_state.history = []  # [(user, assistant), ...]
 
-# عرض السجل
-for turn in st.session_state.history:
-    if turn["role"] == "user":
-        st.chat_message("user").markdown(turn["content"])
-    else:
-        st.chat_message("assistant").markdown(turn["content"])
+SYSTEM_PROMPT = (
+    "أنت بروس، رد بالعربية بشكل واضح ولطيف، وخلّك مختصر ومفيد. "
+    "إذا سأل المستخدم عن الوقت أو شيء عام، جاوبه ببساطة. "
+    "تجنّب الكلام الطويل إلا لو طلب صراحة."
+)
 
-# حقل الإدخال
-user_msg = st.chat_input("اكتب رسالتك...")
+def build_prompt(history, user_message):
+    """
+    نبني prompt بأسلوب [INST] للنماذج التعليمية مثل Mistral-Instruct.
+    """
+    parts = [f"<s>[INST] {SYSTEM_PROMPT} [/INST]"]
+    for u, a in history:
+        parts.append(f"{a}</s><s>[INST] {u} [/INST]")
+    parts.append("")  # يفصل آخر رد
+    parts.append(f"[/INST]")  # إغلاق لو في سطر سابق
+    # آخر رسالة من المستخدم
+    prompt = "<s>[INST] " + user_message + " [/INST]"
+    full = "\n".join(parts) + "\n" + prompt
+    return full
 
-if user_msg:
-    # أضف رسالة المستخدم
-    st.session_state.history.append({"role": "user", "content": user_msg})
-    st.chat_message("user").markdown(user_msg)
+def generate_response(history, user_message):
+    prompt = build_prompt(history, user_message)
+    # توليد نص
+    out = client.text_generation(
+        prompt,
+        max_new_tokens=200,
+        temperature=0.7,
+        top_p=0.9,
+        do_sample=True,
+        repetition_penalty=1.1,
+        stop=["</s>", "[INST]", "[/INST]"],  # يحاول يوقف بشكل نظيف
+        return_full_text=False,              # رجّع الناتج فقط بدون البرومبت
+    )
+    # `out` يكون سترنغ الناتج
+    return out.strip()
 
-    with st.spinner("⏳ يفكر..."):
+# واجهة بسيطة
+with st.form("chat"):
+    user = st.text_input("اكتب رسالتك…", "")
+    sent = st.form_submit_button("إرسال", use_container_width=True)
+
+# عرض التاريخ
+for u, a in st.session_state.history:
+    st.chat_message("user").markdown(u)
+    st.chat_message("assistant").markdown(a)
+
+if sent and user.strip():
+    st.chat_message("user").markdown(user)
+    with st.spinner("⏳ بروس يفكر…"):
         try:
-            reply = generate_response(st.session_state.history, user_msg)
+            reply = generate_response(st.session_state.history, user.strip())
         except Exception as e:
-            st.error(f"صار خطأ أثناء الاتصال بالخدمة: {e}")
+            st.error(f"صار خطأ أثناء الاتصال بالخدمة:\n\n{e}")
             st.stop()
-
-    # أضف رد المساعد
-    st.session_state.history.append({"role": "assistant", "content": reply})
+    st.session_state.history.append((user.strip(), reply))
     st.chat_message("assistant").markdown(reply)
 
-# شريط جانبي
+# زر مسح المحادثة
 with st.sidebar:
-    st.header("إعدادات")
     if st.button("مسح المحادثة"):
         st.session_state.history = []
-        st.experimental_rerun()
-
-    st.caption(":bulb: تلميح: لو حسّيت بطء، جرّب تبدّل MODEL_ID في أعلى الملف إلى موديل آخر يدعم Inference API.")
+        st.success("انمسحت السالفة ✅")
