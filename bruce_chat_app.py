@@ -1,47 +1,42 @@
 import streamlit as st
 from openai import OpenAI
 
-# تفعيل الـ API Key من الـ Secrets في Streamlit
+# إنشاء عميل OpenAI
 client = OpenAI(api_key=st.secrets["OPENAI_API_KEY"])
 
-st.set_page_config(page_title="بروس 😁", page_icon="😁")
+# عنوان التطبيق
+st.set_page_config(page_title="بروس", page_icon="🤖")
+st.title("🤖 بروس")
 
+# حفظ المحادثة في الجلسة
 if "history" not in st.session_state:
     st.session_state.history = []
 
-st.title("بروس 😁")
-st.caption("MVP — يرد بالعربي بشكل واضح وسريع")
+# دالة توليد الرد
+def generate_response(history, prompt):
+    messages = [{"role": "system", "content": "أنت بروس، روبوت ذكي يتكلم باللهجة العربية بطابع ودود."}]
+    for h in history:
+        messages.append({"role": "user", "content": h[0]})
+        messages.append({"role": "assistant", "content": h[1]})
+    messages.append({"role": "user", "content": prompt})
 
-# دالة لتوليد الردود من OpenAI
-def generate(history, user_input):
-    messages = [{"role": "system", "content": "أنت بروس، رد بالعربية بشكل واضح ومختصر."}]
-    for u, a in history:
-        messages.append({"role": "user", "content": u})
-        messages.append({"role": "assistant", "content": a})
-    messages.append({"role": "user", "content": user_input})
-
-    resp = client.chat.completions.create(
+    response = client.chat.completions.create(
         model="gpt-4o-mini",
         messages=messages,
         max_tokens=350
     )
-    reply = resp.choices[0].message.content
-    return reply
 
-# عرض المحادثة السابقة
-for user_msg, bot_msg in st.session_state.history:
-    with st.chat_message("user"):
-        st.markdown(user_msg)
-    with st.chat_message("assistant"):
-        st.markdown(bot_msg)
+    return response.choices[0].message.content
 
 # إدخال المستخدم
-if prompt := st.chat_input("...اكتب رسالتك"):
-    with st.chat_message("user"):
-        st.markdown(prompt)
+prompt = st.chat_input("💬 اكتب رسالتك هنا...")
 
-    with st.chat_message("assistant"):
-        with st.spinner("⏳ بروس يكتب..."):
-            reply = generate(st.session_state.history, prompt)
-            st.session_state.history.append((prompt, reply))
-            st.markdown(reply)
+if prompt:
+    with st.spinner("🤖 بروس يكتب الرد..."):
+        reply = generate_response(st.session_state.history, prompt)
+        st.session_state.history.append((prompt, reply))
+
+# عرض المحادثة
+for user_msg, bot_reply in st.session_state.history:
+    st.chat_message("user").markdown(user_msg)
+    st.chat_message("assistant").markdown(bot_reply)
